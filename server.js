@@ -8,6 +8,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
+  transports: ["websocket"],
   pingTimeout: 20000,
   pingInterval: 10000,
 });
@@ -44,40 +45,27 @@ io.on("connection", (socket) => {
 
   socket.on("join-room", ({ code, role, username }) => {
     if (!validateCode(code)) { socket.emit("error-msg", { msg: "Invalid room code." }); return; }
-
     const name = sanitize(username);
     const safeRole = role === "host" ? "host" : "guest";
-
     if (safeRole === "guest" && !rooms[code]) { socket.emit("room-not-found"); return; }
-
     if (socket.roomCode && socket.roomCode !== code) {
       socket.leave(socket.roomCode);
-      if (rooms[socket.roomCode]) {
-        rooms[socket.roomCode].users.delete(socket.id);
-        broadcastCount(socket.roomCode);
-      }
+      if (rooms[socket.roomCode]) { rooms[socket.roomCode].users.delete(socket.id); broadcastCount(socket.roomCode); }
     }
-
     socket.join(code);
     socket.roomCode = code;
     socket.username = name;
     socket.role = safeRole;
-
     if (!rooms[code]) rooms[code] = { hostId: socket.id, users: new Map(), lastUrl: null };
-
     rooms[code].users.set(socket.id, { username: name, role: safeRole });
-
     if (safeRole === "host") {
       rooms[code].hostId = socket.id;
-      console.log("HOST " + name + " created room " + code);
+      console.log("HOST " + name + " room " + code);
     } else {
-      console.log("GUEST " + name + " joined room " + code);
+      console.log("GUEST " + name + " room " + code);
       socket.to(code).emit("guest-joined", { username: name });
-      if (rooms[code].lastUrl) {
-        socket.emit("tab-sync", { url: rooms[code].lastUrl, username: socket.username });
-      }
+      if (rooms[code].lastUrl) socket.emit("tab-sync", { url: rooms[code].lastUrl, username: name });
     }
-
     broadcastCount(code);
     broadcastUserList(code);
   });
@@ -94,19 +82,6 @@ io.on("connection", (socket) => {
     if (socket.role !== "host" || !socket.roomCode) return;
     if (typeof x !== "number" || typeof y !== "number") return;
     socket.to(socket.roomCode).emit("scroll-sync", { x, y });
-  });
-
-  socket.on("search_sync", ({ query }) => {
-    if (socket.role !== "host" || !socket.roomCode) return;
-    socket.to(socket.roomCode).emit("search_sync", {
-      query: typeof query === "string" ? query.slice(0, 100) : "",
-    });
-  });
-
-  socket.on("scroll_section", ({ secId }) => {
-    if (socket.role !== "host" || !socket.roomCode) return;
-    if (typeof secId !== "string") return;
-    socket.to(socket.roomCode).emit("scroll_section", { secId: secId.slice(0, 40) });
   });
 
   socket.on("chat", ({ text }) => {
@@ -127,7 +102,7 @@ io.on("connection", (socket) => {
     delete rooms[socket.roomCode];
   });
 
-  socket.on("disconnect", (reason) => {
+  socket.on("disconnect", () => {
     const code = socket.roomCode;
     if (!code || !rooms[code]) return;
     rooms[code].users.delete(socket.id);
